@@ -1,34 +1,60 @@
 <script setup lang="ts">
-import { ref, watch, onUnmounted } from 'vue'
+import { ref, watch } from 'vue'
 import type { SpriteRect, ExportOptions } from '../lib/types'
 import { imageDataToCanvas } from '../lib/imageUtils'
 import { exportSingle } from '../lib/exporter'
 
+interface SpriteListItem {
+  key: string
+  imageId: string
+  source: ImageData
+  rect: SpriteRect
+}
+
 const props = defineProps<{
-  source: ImageData | null
-  rects: SpriteRect[]
+  items: SpriteListItem[]
+  activeImageId: string
+  hoverImageId: string | null
   hoverIndex: number | null
   exportSize: ExportOptions
 }>()
 const emit = defineEmits<{
-  (e: 'hover', index: number | null): void
-  (e: 'merge', ids: number[]): void
+  (e: 'hover', target: { imageId: string; index: number } | null): void
+  (e: 'activate', imageId: string): void
+  (e: 'merge', payload: { imageId: string; ids: number[] }): void
 }>()
 
 // index -> dataURL 缩略图
-const thumbs = ref<Map<number, string>>(new Map())
-const busy = ref<number | null>(null)
+const thumbs = ref<Map<string, string>>(new Map())
+const busy = ref<string | null>(null)
 // 多选合并用
-const selected = ref<Set<number>>(new Set())
+const selected = ref<Set<string>>(new Set())
+
+function itemKey(item: SpriteListItem): string {
+  return item.key
+}
+
+function hoverKey(item: SpriteListItem): boolean {
+  return (
+    props.hoverImageId === item.imageId &&
+    props.hoverIndex === item.rect.index
+  )
+}
 
 function buildThumbs() {
   // 释放旧的 dataURL（dataURL 无需 revoke，但清理引用）
   thumbs.value = new Map()
-  if (!props.source || props.rects.length === 0) return
+  if (props.items.length === 0) return
 
-  const sc = imageDataToCanvas(props.source)
-  const map = new Map<number, string>()
-  for (const r of props.rects) {
+  const sourceCanvases = new Map<string, HTMLCanvasElement>()
+  const map = new Map<string, string>()
+  for (const item of props.items) {
+    let sc = sourceCanvases.get(item.imageId)
+    if (!sc) {
+      sc = imageDataToCanvas(item.source)
+      sourceCanvases.set(item.imageId, sc)
+    }
+    const r = item.rect
     const c = document.createElement('canvas')
     c.width = r.width
     c.height = r.height
@@ -43,29 +69,44 @@ function buildThumbs() {
       r.width,
       r.height,
     )
-    map.set(r.index, c.toDataURL('image/png'))
+    map.set(itemKey(item), c.toDataURL('image/png'))
   }
   thumbs.value = map
 }
 
 watch(
-  [() => props.source, () => props.rects],
+  () => props.items,
   buildThumbs,
   { immediate: true },
 )
 
 // 检测结果变化时清空选择（索引会重新编号）
 watch(
-  () => props.rects,
+  () => props.items,
   () => {
     selected.value = new Set()
   },
 )
 
-function toggle(id: number) {
+function selectedImageId(): string | null {
+  const first = [...selected.value][0]
+  return first ? first.split(':')[0] : null
+}
+
+function selectedIds(): number[] {
+  return [...selected.value].map((key) => Number(key.split(':')[1]))
+}
+
+function toggle(item: SpriteListItem) {
+  emit('activate', item.imageId)
+  const key = itemKey(item)
   const s = new Set(selected.value)
-  if (s.has(id)) s.delete(id)
-  else s.add(id)
+  if (s.has(key)) s.delete(key)
+  else {
+    const currentImageId = selectedImageId()
+    if (currentImageId && currentImageId !== item.imageId) s.clear()
+    s.add(key)
+  }
   selected.value = s
 }
 
@@ -75,15 +116,18 @@ function clearSelect() {
 
 function onMerge() {
   if (selected.value.size < 2) return
-  emit('merge', [...selected.value])
+  const imageId = selectedImageId()
+  if (!imageId) return
+  emit('merge', { imageId, ids: selectedIds() })
   selected.value = new Set()
 }
 
-async function onDownload(r: SpriteRect) {
-  if (!props.source || busy.value !== null) return
-  busy.value = r.index
+async function onDownload(item: SpriteListItem) {
+  if (busy.value !== null) return
+  const key = itemKey(item)
+  busy.value = key
   try {
-    await exportSingle(props.source, r, props.exportSize)
+    await exportSingle(item.source, item.rect, props.exportSize)
   } finally {
     busy.value = null
   }
@@ -95,7 +139,7 @@ async function onDownload(r: SpriteRect) {
     <div class="flex items-center justify-between">
       <div class="text-sm font-medium text-slate-600">
         素材列表
-        <span class="text-slate-400 font-normal">({{ rects.length }})</span>
+        <span class="text-slate-400 font-normal">({{ items.length }})</span>
       </div>
       <div class="flex items-center gap-1.5">
         <button
@@ -115,30 +159,31 @@ async function onDownload(r: SpriteRect) {
       </div>
     </div>
 
-    <div v-if="rects.length === 0" class="text-sm text-slate-400 py-8 text-center">
+    <div v-if="items.length === 0" class="text-sm text-slate-400 py-8 text-center">
       未检测到素材
     </div>
 
     <template v-else>
-      <div class="text-[11px] text-slate-400">点击多个素材选中后，点「合并选中」可合并为一</div>
+      <div class="text-[11px] text-slate-400">点击同一图片里的多个素材后，点「合并选中」可合并为一</div>
       <div class="grid grid-cols-2 gap-2 max-h-[70vh] overflow-auto pr-1">
         <div
-          v-for="r in rects"
-          :key="r.index"
-          @click="toggle(r.index)"
-          @mouseenter="emit('hover', r.index)"
+          v-for="item in items"
+          :key="item.key"
+          @click="toggle(item)"
+          @mouseenter="emit('hover', { imageId: item.imageId, index: item.rect.index })"
           @mouseleave="emit('hover', null)"
           :class="[
-            selected.has(r.index)
+            item.imageId === activeImageId ? 'border-sky-100' : 'border-transparent',
+            selected.has(item.key)
               ? 'ring-2 ring-inset ring-emerald-400 bg-emerald-50/50'
-              : hoverIndex === r.index
+              : hoverKey(item)
                 ? 'ring-2 ring-inset ring-amber-400 bg-amber-50/50'
                 : 'ring-1 ring-inset ring-slate-200 hover:ring-sky-300 bg-white',
           ]"
-          class="relative rounded-lg p-2 flex flex-col items-center gap-1.5 cursor-pointer transition select-none"
+          class="relative rounded-lg border p-2 flex flex-col items-center gap-1.5 cursor-pointer transition select-none"
         >
           <div
-            v-if="selected.has(r.index)"
+            v-if="selected.has(item.key)"
             class="absolute top-1 left-1 z-10 w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow"
           >
             <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
@@ -149,22 +194,22 @@ async function onDownload(r: SpriteRect) {
             class="checker-sm h-20 w-full flex items-center justify-center rounded overflow-hidden"
           >
             <img
-              v-if="thumbs.get(r.index)"
-              :src="thumbs.get(r.index)"
+              v-if="thumbs.get(item.key)"
+              :src="thumbs.get(item.key)"
               class="max-h-20 max-w-full object-contain"
               alt="sprite"
             />
           </div>
-          <div class="text-xs text-slate-500 w-full flex justify-between">
-            <span>#{{ r.index }}</span>
-            <span class="font-mono">{{ r.width }}×{{ r.height }}</span>
+          <div class="text-xs text-slate-500 w-full flex justify-between gap-2">
+            <span>#{{ item.rect.index }}</span>
+            <span class="font-mono">{{ item.rect.width }}×{{ item.rect.height }}</span>
           </div>
           <button
-            @click.stop="onDownload(r)"
+            @click.stop="onDownload(item)"
             :disabled="busy !== null"
             class="w-full text-xs bg-sky-500 hover:bg-sky-600 disabled:opacity-50 text-white py-1.5 rounded transition"
           >
-            {{ busy === r.index ? '下载中…' : '下载' }}
+            {{ busy === item.key ? '下载中…' : '下载' }}
           </button>
         </div>
       </div>

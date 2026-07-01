@@ -86,6 +86,15 @@ function canvasToBlob(c: HTMLCanvasElement): Promise<Blob> {
   })
 }
 
+function safeName(name: string): string {
+  return (
+    name
+      .replace(/\.[^.]+$/, '')
+      .replace(/[\\/:*?"<>|]+/g, '_')
+      .trim() || 'image'
+  )
+}
+
 /**
  * 生成素材文件名：sprite_000_64x48.png
  * 启用固定导出尺寸时用导出尺寸，否则用素材原尺寸。
@@ -106,11 +115,15 @@ export async function exportSingle(
   source: ImageData,
   rect: SpriteRect,
   exportOpts?: ExportOptions,
+  filenamePrefix?: string,
 ): Promise<void> {
   const src = imageDataToCanvas(source)
   const c = cropToCanvas(src, rect, exportOpts)
   const blob = await canvasToBlob(c)
-  downloadBlob(blob, spriteFileName(rect, exportOpts))
+  const filename = filenamePrefix
+    ? `${safeName(filenamePrefix)}_${spriteFileName(rect, exportOpts)}`
+    : spriteFileName(rect, exportOpts)
+  downloadBlob(blob, filename)
 }
 
 /**
@@ -133,6 +146,40 @@ export async function exportAllZip(
     done++
     onProgress?.(done, rects.length)
   }
+  const zipBlob = await zip.generateAsync({ type: 'blob' })
+  downloadBlob(zipBlob, `pngspliter_${Date.now()}.zip`)
+}
+
+export interface ZipImageGroup {
+  source: ImageData
+  rects: SpriteRect[]
+}
+
+/** 将多张图片的全部素材平铺打包为 ZIP。 */
+export async function exportManyZip(
+  groups: ZipImageGroup[],
+  exportOpts?: ExportOptions,
+  onProgress?: (done: number, total: number) => void,
+): Promise<void> {
+  const zip = new JSZip()
+  const total = groups.reduce((sum, group) => sum + group.rects.length, 0)
+  let done = 0
+
+  for (let i = 0; i < groups.length; i++) {
+    const group = groups[i]
+    if (group.rects.length === 0) continue
+    const src = imageDataToCanvas(group.source)
+    const imagePrefix = `image_${String(i + 1).padStart(3, '0')}`
+
+    for (const r of group.rects) {
+      const c = cropToCanvas(src, r, exportOpts)
+      const blob = await canvasToBlob(c)
+      zip.file(`${imagePrefix}_${spriteFileName(r, exportOpts)}`, blob)
+      done++
+      onProgress?.(done, total)
+    }
+  }
+
   const zipBlob = await zip.generateAsync({ type: 'blob' })
   downloadBlob(zipBlob, `pngspliter_${Date.now()}.zip`)
 }

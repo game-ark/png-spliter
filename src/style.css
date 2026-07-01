@@ -11,3 +11,14 @@
   background-position: 0 0, 0 8px, 8px -8px, -8px 0;
   background-color: #ffffff;
 }
+
+.checker-sm {
+  background-image:
+    linear-gradient(45deg, #d8e0ea 25%, transparent 25%),
+    linear-gradient(-45deg, #d8e0ea 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #d8e0ea 75%),
+    linear-gradient(-45deg, transparent 75%, #d8e0ea 75%);
+  background-size: 10px 10px;
+  background-position: 0 0, 0 5px, 5px -5px, -5px 0;
+  background-color: #ffffff;
+}

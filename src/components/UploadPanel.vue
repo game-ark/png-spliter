@@ -2,32 +2,34 @@
 import { ref } from 'vue'
 
 const emit = defineEmits<{
-  (e: 'select', file: File): void
+  (e: 'select', files: File[]): void
 }>()
 
 const error = ref('')
 const dragging = ref(false)
 
-function handleFile(f: File | undefined) {
-  if (!f) return
-  if (f.type !== 'image/png') {
+function handleFiles(files: FileList | File[] | undefined) {
+  const list = Array.from(files ?? [])
+  if (list.length === 0) return
+  const pngFiles = list.filter((f) => f.type === 'image/png')
+  if (pngFiles.length !== list.length) {
     error.value = '仅支持 PNG 文件'
     return
   }
   error.value = ''
-  emit('select', f)
+  emit('select', pngFiles)
 }
 
 function onFile(e: Event) {
   const target = e.target as HTMLInputElement
-  handleFile(target.files?.[0])
+  handleFiles(target.files ?? undefined)
   target.value = ''
 }
 
 function onDrop(e: DragEvent) {
   e.preventDefault()
   dragging.value = false
-  handleFile(e.dataTransfer?.files?.[0])
+  handleFiles(e.dataTransfer?.files ?? undefined)
 }
 
 function onDragOver(e: DragEvent) {
@@ -51,7 +53,7 @@ function onDragLeave() {
       @dragover="onDragOver"
       @dragleave="onDragLeave"
     >
-      <input type="file" accept="image/png" class="hidden" @change="onFile" />
+      <input type="file" accept="image/png" multiple class="hidden" @change="onFile" />
       <svg
         class="w-12 h-12 text-slate-400"
         viewBox="0 0 24 24"
@@ -66,7 +68,7 @@ function onDragLeave() {
         />
       </svg>
       <div class="text-slate-600 text-sm">拖拽 PNG 素材图到此处，或点击选择文件</div>
-      <div class="text-xs text-slate-400">单张合图，按透明像素自动分离</div>
+      <div class="text-xs text-slate-400">可一次选择多张 PNG，按透明像素自动分离</div>
     </label>
     <div v-if="error" class="text-sm text-rose-500">{{ error }}</div>
   </div>
